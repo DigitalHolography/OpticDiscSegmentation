@@ -13,5 +13,6 @@ This repository provides an **optic disc** segmentation and calibration pipeline
 ├── optic_disc.ipynb   # Notebook for optic disc prediction and vizualisation
 ├── pngs.txt           # (INFORAMTION) List of image paths used for dataset creation
 ├── pngs2.txt          # (INFORAMTION) List of additional image paths for future datasets
+├── same.txt           # (INFORAMTION) List of image paths of the same eye
 └── yolo.ipynb         # Notebook for Ultralytics' YOLO information and training
 ```
