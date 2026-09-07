@@ -1,0 +1,22 @@
+# Python 3.12 recommended.
+# Direct dependencies imported by the notebooks.
+ultralytics
+opencv-python
+numpy
+matplotlib
+tqdm
+
+# Notebook interface and Python kernel.
+jupyterlab
+ipykernel
+
+# ONNX export in yolo.ipynb and CPU inference with exported models.
+onnx
+onnxslim
+onnxruntime
+
+# Download models and datasets from Hugging Face (optional for existing notebooks).
+huggingface-hub
+
+# Versions are not pinned: the original environment is not documented.
+# PyTorch and torchvision are installed as dependencies of ultralytics.
