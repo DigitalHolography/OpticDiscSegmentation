@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# ----- Structure of different returnes types ----- #
+# ----- Structure of different returned types ----- #
 DETECTION_DTYPE = np.dtype([("confidence", np.float64), ("box_xywh", np.float64, (4,))])
 ELLIPSE_DTYPE = np.dtype([
     ("center_px", np.float64, (2,)), ("semi_axes_px", np.float64, (2,)),
