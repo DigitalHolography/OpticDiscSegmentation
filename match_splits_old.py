@@ -12,14 +12,10 @@ Usage depuis le dépôt :
     python match_splits.py data/optic_disc pngs2.txt pngs.txt
     python match_splits.py --dhash-threshold 6
 
-Chaque exécution écrit dans un nouveau sous-dossier horodaté de splits_out,
-sans jamais écraser de fichier existant :
-mapping.csv (une ligne par candidat), patient_overlap.csv,
-train_candidates.txt, val_candidates.txt (tous statuts confondus),
-unmatched.txt, missing_originals.txt, unreadable_originals.txt.
+Sorties : mapping.csv (une ligne par candidat), patient_overlap.csv,
+train.txt, val.txt, unmatched.txt, missing_originals.txt, unreadable_originals.txt.
 L'identité patient est inférée du nom NAS : date et côté sont ignorés,
 les codes BL/BL2/AS/apne sont traités comme des suffixes d'acquisition.
-Les identifiants alphabétiques X, XB et XH sont regroupés comme alias possibles.
 Les identifiants IREDO et les normalisations moins sûres restent à vérifier.
 Des alias d'un même patient ne peuvent pas être déduits des images.
 """
@@ -32,7 +28,6 @@ import hashlib
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
 import cv2
@@ -46,7 +41,6 @@ PATIENT_PATTERN = re.compile(
     r"(?:[LR]\d*|HD|BL\d*|AS|APNE|\d+)_)",
     re.IGNORECASE,
 )
-
 
 def file_md5(path: Path, chunk: int = 1 << 20) -> str | None:
     """md5 des octets bruts du fichier."""
@@ -103,62 +97,25 @@ def hamming(a: int, b: int) -> int:
 
 
 def patient_info(path: Path) -> tuple[str, str]:
-    """Identifiant inféré et réserves éventuelles ; ne déduit pas d'alias certains."""
+    """Identifiant inféré et réserve éventuelle ; ne déduit pas d'alias certains."""
     name = PureWindowsPath(str(path)).stem.upper()
     name = re.sub(r"^\d{6}_", "", name)
     iredo = re.match(r"IREDO\s*-?\s*(\d+)(?=[\s_-])", name)
     if iredo:
         # Le numéro 40 apparaît avec HA et VS : ne pas certifier ces identités.
         return f"IREDO{iredo[1]}", "Identité IREDO à valider (numéros parfois ambigus)"
-    # Les réserves se cumulent au lieu de s'écraser.
-    notes = []
+    note = ""
     if re.match(r"^\d{6}[A-Z]", name):
         name = name[6:]
-        notes.append("Date accolée à l'identifiant retirée : alias à valider")
+        note = "Date accolée à l'identifiant retirée : alias à valider"
     if name.startswith("JUSTINEPRESSURE_"):
-        notes.append("Nom de protocole : identité patient à valider")
-        return "JUSTINEPRESSURE", " ; ".join(notes)
+        return "JUSTINEPRESSURE", "Nom de protocole : identité patient à valider"
     match = PATIENT_PATTERN.match(name)
     if not match:
-        notes.append("Format d'identifiant non reconnu")
-        return "", " ; ".join(notes)
+        return "", "Format d'identifiant non reconnu"
     if match["variant"]:
-        notes.append("Suffixe b/h retiré : alias patient à valider")
-    return match["patient"].replace("_", ""), " ; ".join(notes)
-
-
-def alias_base(patient_id: str) -> str | None:
-    """
-    XB ou XH peut être un alias de X. Sans chiffres dans l'identifiant,
-    [A-Z]+ absorbe le B/H final et le groupe variant reste vide :
-    le suffixe n'est pas retiré, seulement signalé ici.
-    """
-    if len(patient_id) > 1 and patient_id.isalpha() and patient_id[-1] in "BH":
-        return patient_id[:-1]
-    return None
-
-
-def alias_groups(patient_ids) -> list[list[str]]:
-    """Regroupe X, XB et XH (y compris XB et XH sans X) par union-find."""
-    parent: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    ids = list(patient_ids)
-    for pid in ids:
-        base = alias_base(pid)
-        root = find(pid)
-        if base is not None:
-            parent[root] = find(base)
-    groups = defaultdict(list)
-    for pid in ids:
-        groups[find(pid)].append(pid)
-    return sorted(sorted(group) for group in groups.values())
+        note = "Suffixe b/h retiré : alias patient à valider"
+    return match["patient"].replace("_", ""), note
 
 
 def write_lines(path: Path, lines) -> None:
@@ -219,13 +176,14 @@ def match_dataset(dataset_dir: Path, list_files: list[Path], out_dir: Path,
     if not originals:
         raise ValueError("Aucune originale accessible. Vérifier les listes et "
                          "la connexion au NAS (lecteur Y:). Aucun audit effectué.")
-    # Un dossier neuf par exécution : aucun fichier existant (listes sources,
-    # rapports annotés, liens, variantes de casse) ne peut être écrasé.
-    run_dir = out_dir / datetime.now().strftime("%Y%m%d_%H%M%S")
-    output = run_dir.resolve()
+    # Empêche les rapports d'écraser les données ou les listes sources.
+    output = out_dir.resolve()
     if output == dataset_dir.resolve() or dataset_dir.resolve() in output.parents:
         raise ValueError("Le dossier de sortie doit être en dehors du dataset.")
-    run_dir.mkdir(parents=True, exist_ok=False)  # échoue tôt, n'écrase jamais
+    report_names = {"mapping.csv", "patient_overlap.csv", "train.txt", "val.txt",
+                    "unmatched.txt", "missing_originals.txt", "unreadable_originals.txt"}
+    if any(p.resolve().parent == output and p.name in report_names for p in list_files):
+        raise ValueError("Une liste source serait écrasée par un rapport.")
 
     print(f"{len(dataset)} images du dataset ; {len(originals)} originales accessibles ; "
           f"{len(missing)} chemins NAS absents.")
@@ -284,45 +242,35 @@ def match_dataset(dataset_dir: Path, list_files: list[Path], out_dir: Path,
     for row in rows:
         if row["patient_id"]:
             by_patient[row["patient_id"]][row["split"]].append(row)
-
-    def confirmed(groups) -> bool:
-        return all(any(r["status"] == "exact_patient" for r in groups.get(s, ()))
-                   for s in SPLITS)
-
     overlaps = []
-    for ids in alias_groups(by_patient):
-        merged = {s: [r for pid in ids for r in by_patient[pid].get(s, [])]
-                  for s in SPLITS}
-        if not all(merged[s] for s in SPLITS):
+    for patient, groups in sorted(by_patient.items()):
+        if not all(split in groups for split in SPLITS):
             continue
-        # Exact seulement si un même identifiant est confirmé dans les deux splits ;
-        # un chevauchement qui ne passe que par un alias b/h reste possible.
-        is_exact = any(confirmed(by_patient[pid]) for pid in ids)
+        confirmed = all(any(r["status"] == "exact_patient" for r in groups[s])
+                        for s in SPLITS)
         overlaps.append({
-            "patient_id": " / ".join(ids),
-            "status": "exact_overlap" if is_exact else "possible_overlap",
-            "note": (f"Alias possibles (suffixe b/h) à valider : {', '.join(ids)}"
-                     if len(ids) > 1 else ""),
-            "train_images": "\n".join(sorted({r["image"] for r in merged["train"]})),
-            "val_images": "\n".join(sorted({r["image"] for r in merged["val"]})),
-            "train_originals": "\n".join(sorted({r["original"] for r in merged["train"]})),
-            "val_originals": "\n".join(sorted({r["original"] for r in merged["val"]})),
+            "patient_id": patient,
+            "status": "exact_overlap" if confirmed else "possible_overlap",
+            "train_images": "\n".join(sorted({r["image"] for r in groups["train"]})),
+            "val_images": "\n".join(sorted({r["image"] for r in groups["val"]})),
+            "train_originals": "\n".join(sorted({r["original"] for r in groups["train"]})),
+            "val_originals": "\n".join(sorted({r["original"] for r in groups["val"]})),
         })
 
-    write_csv(run_dir / "mapping.csv",
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(out_dir / "mapping.csv",
               ["split", "image", "original", "source_lists", "patient_id",
                "patient_note", "method", "distance",
                "candidate_count", "status"], rows)
-    write_csv(run_dir / "patient_overlap.csv",
-              ["patient_id", "status", "note", "train_images", "val_images",
+    write_csv(out_dir / "patient_overlap.csv",
+              ["patient_id", "status", "train_images", "val_images",
                "train_originals", "val_originals"], overlaps)
     for split in SPLITS:
-        # Tous les candidats, y compris « review » et dHash : pas une liste de référence.
-        write_lines(run_dir / f"{split}_candidates.txt",
+        write_lines(out_dir / f"{split}.txt",
                     sorted({r["original"] for r in rows if r["split"] == split}))
-    write_lines(run_dir / "unmatched.txt", unmatched)
-    write_lines(run_dir / "missing_originals.txt", missing)
-    write_lines(run_dir / "unreadable_originals.txt", unreadable)
+    write_lines(out_dir / "unmatched.txt", unmatched)
+    write_lines(out_dir / "missing_originals.txt", missing)
+    write_lines(out_dir / "unreadable_originals.txt", unreadable)
 
     exact = sum(r["status"] == "exact_overlap" for r in overlaps)
     unresolved = {(r["split"], r["image"]) for r in rows if r["status"] == "review"}
@@ -334,7 +282,7 @@ def match_dataset(dataset_dir: Path, list_files: list[Path], out_dir: Path,
         print("[!] Audit incomplet : consulter les rapports avant toute conclusion.")
     print("L'absence de patient commun détecté ne garantit pas l'absence de fuite : "
           "les alias et identifiants NAS doivent être validés.")
-    print(f"Rapports : {run_dir.resolve()}")
+    print(f"Rapports : {out_dir.resolve()}")
 
 
 def main() -> None:
@@ -345,9 +293,7 @@ def main() -> None:
     parser.add_argument("lists", nargs="*", type=Path,
                         default=[ROOT / "pngs.txt", ROOT / "pngs2.txt"],
                         help="listes NAS (défaut : pngs.txt et pngs2.txt)")
-    parser.add_argument("-o", "--out", type=Path, default=ROOT / "splits_out",
-                        help="dossier parent ; chaque exécution crée un sous-dossier "
-                             "horodaté")
+    parser.add_argument("-o", "--out", type=Path, default=ROOT / "splits_out")
     parser.add_argument("--dhash-threshold", type=int, default=0,
                         help="0 : désactivé (défaut) ; 1–256 : candidats perceptuels "
                              "à vérifier, par exemple 6.")
