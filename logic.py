@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from tqdm.auto import tqdm
 
 # ----- Structure of different returned types ----- #
 DETECTION_DTYPE = np.dtype([("confidence", np.float64), ("box_xywh", np.float64, (4,))])
@@ -228,15 +229,23 @@ def predict_optic_disc_temporal(model, dir_path, disc_height_prior_mm=1.92,
 
     predictions = np.empty((len(videos_dir), nb_frames), dtype=PREDICTION_DTYPE)
 
-    for vid_idx, currdir in enumerate(videos_dir):
-        for frame_idx, currfile in enumerate(files_names):
-            predictions[vid_idx, frame_idx] = predict_optic_disc(
-                model = model,
-                image_path=currdir / currfile,
-                disc_height_prior_mm=disc_height_prior_mm,
-                prediction_confidence=prediction_confidence,
-                calibration_confidence=calibration_confidence,
-            )
+    with tqdm(
+        total=len(videos_dir) * nb_frames,
+        desc="Inférence",
+        unit="frame",
+    ) as progress:
+        for vid_idx, currdir in enumerate(videos_dir):
+            progress.set_postfix(video=currdir.name)
+
+            for frame_idx, currfile in enumerate(files_names):
+                predictions[vid_idx, frame_idx] = predict_optic_disc(
+                    model=model,
+                    image_path=currdir / currfile,
+                    disc_height_prior_mm=disc_height_prior_mm,
+                    prediction_confidence=prediction_confidence,
+                    calibration_confidence=calibration_confidence,
+                )
+                progress.update(1)
 
     return predictions
 
